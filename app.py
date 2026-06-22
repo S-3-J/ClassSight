@@ -1,0 +1,262 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import cv2
+import numpy as np
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from werkzeug.utils import secure_filename
+
+from attendance import AttendanceTracker, VideoAttendanceProcessor
+from database import AttendanceDB
+from embedder import FaceEmbedder
+
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+
+app = Flask(__name__)
+app.config["SECRET_KEY"] = "dev-secret-change-before-production"
+app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024
+
+db = AttendanceDB()
+embedder = FaceEmbedder(enforce_detection=True)
+
+
+@app.get("/")
+def index():
+    return render_template(
+        "index.html",
+        students=db.list_students(),
+        sessions=db.list_sessions(),
+    )
+
+
+@app.route("/enroll", methods=["GET", "POST"])
+def enroll():
+    if request.method == "GET":
+        return render_template("enroll.html", students=db.list_students())
+
+    student_id = request.form.get("student_id", "").strip()
+    name = request.form.get("name", "").strip()
+    files = request.files.getlist("images")
+
+    if not student_id or not name:
+        flash("Student ID and name are required.", "error")
+        return redirect(url_for("enroll"))
+
+    if not files or all(not file.filename for file in files):
+        flash("Upload at least one face image.", "error")
+        return redirect(url_for("enroll"))
+
+    db.upsert_student(student_id, name)
+
+    saved = 0
+    failures = []
+    for file in files:
+        if not file.filename:
+            continue
+
+        try:
+            image = decode_image(file.read())
+            embedding = embedder.get_embedding(image)
+            db.add_embedding(
+                student_id=student_id,
+                embedding=embedding,
+                recognition_model=embedder.recognition_model,
+                detector_backend=embedder.detector_backend,
+            )
+            saved += 1
+        except Exception as exc:
+            failures.append(f"{file.filename}: {exc}")
+
+    if saved:
+        flash(f"Enrolled {saved} embedding(s) for {name}.", "success")
+
+    for failure in failures[:3]:
+        flash(failure, "error")
+
+    return redirect(url_for("enroll"))
+
+
+@app.route("/attendance", methods=["GET", "POST"])
+def attendance():
+    if request.method == "GET":
+        return render_template("attendance.html", students=db.list_students())
+
+    title = request.form.get("title", "Class").strip() or "Class"
+    class_duration = float(request.form.get("class_duration_minutes", 40))
+    required_minutes = float(request.form.get("required_minutes", 30))
+    threshold = float(request.form.get("similarity_threshold", 0.55))
+    interval = float(request.form.get("detection_interval_seconds", 5))
+    video = request.files.get("video")
+
+    if video is None or not video.filename:
+        flash("Upload a video file to process.", "error")
+        return redirect(url_for("attendance"))
+
+    if required_minutes > class_duration:
+        flash("Required attendance minutes cannot exceed class duration.", "error")
+        return redirect(url_for("attendance"))
+
+    filename = secure_filename(video.filename)
+    video_path = UPLOAD_DIR / filename
+    video.save(video_path)
+
+    session_id = db.create_session(
+        title=title,
+        class_duration_minutes=class_duration,
+        required_minutes=required_minutes,
+        similarity_threshold=threshold,
+        detection_interval_seconds=interval,
+    )
+
+    processor = VideoAttendanceProcessor(
+        db=db,
+        embedder=FaceEmbedder(enforce_detection=False),
+    )
+    stats = processor.process_video(
+        video_path=video_path,
+        session_id=session_id,
+        similarity_threshold=threshold,
+        detection_interval_seconds=interval,
+    )
+
+    flash(
+        "Processed video: "
+        f"{stats['frames_sampled']} sampled frame(s), "
+        f"{stats['detections']} matched detection(s).",
+        "success",
+    )
+    return redirect(url_for("attendance_result", session_id=session_id))
+
+
+@app.get("/live")
+def live():
+    return render_template("live.html", students=db.list_students())
+
+
+@app.post("/api/live/start")
+def api_live_start():
+    payload = request.get_json(silent=True) or {}
+    title = str(payload.get("title") or "Live Class")
+    class_duration = float(payload.get("class_duration_minutes") or 40)
+    required_minutes = float(payload.get("required_minutes") or 30)
+    threshold = float(payload.get("similarity_threshold") or 0.55)
+    interval = float(payload.get("detection_interval_seconds") or 2)
+
+    if required_minutes > class_duration:
+        return jsonify({"error": "Required minutes cannot exceed class duration."}), 400
+
+    session_id = db.create_session(
+        title=title,
+        class_duration_minutes=class_duration,
+        required_minutes=required_minutes,
+        similarity_threshold=threshold,
+        detection_interval_seconds=interval,
+    )
+    return jsonify({"session_id": session_id})
+
+
+@app.post("/api/live/recognize")
+def api_live_recognize():
+    image_file = request.files.get("frame")
+    if image_file is None:
+        return jsonify({"error": "No frame uploaded."}), 400
+
+    session_id = request.form.get("session_id", type=int)
+    threshold = request.form.get("similarity_threshold", type=float) or 0.55
+    record_attendance = request.form.get("record_attendance") == "true" and session_id
+
+    try:
+        image = decode_image(image_file.read())
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    tracker = AttendanceTracker(
+        db=db,
+        embedder=FaceEmbedder(enforce_detection=True),
+        session_id=session_id or 0,
+        similarity_threshold=threshold,
+    )
+
+    try:
+        face_records = tracker.embedder.represent(image)
+    except Exception:
+        face_records = []
+
+    detections = []
+    detected_at = datetime_now()
+    for face_record in face_records:
+        embedding = np.asarray(face_record["embedding"], dtype=np.float32)
+        best_match = tracker.best_match(embedding)
+        recognized = best_match is not None and best_match.similarity >= threshold
+
+        if recognized and record_attendance:
+            db.record_detection(
+                session_id=session_id,
+                student_id=best_match.student_id,
+                detected_at=detected_at,
+                similarity=best_match.similarity,
+            )
+
+        detections.append(
+            {
+                "student_id": best_match.student_id if recognized else None,
+                "name": best_match.name if recognized else "Unknown",
+                "similarity": best_match.similarity if best_match else 0,
+                "recognized": recognized,
+                "facial_area": face_record.get("facial_area"),
+            }
+        )
+
+    return jsonify(
+        {
+            "detections": detections
+        }
+    )
+
+
+@app.post("/api/live/finish")
+def api_live_finish():
+    payload = request.get_json(silent=True) or {}
+    session_id = int(payload.get("session_id") or 0)
+    if not session_id:
+        return jsonify({"error": "No active session."}), 400
+
+    db.complete_session(session_id)
+    return jsonify({"result_url": url_for("attendance_result", session_id=session_id)})
+
+
+@app.get("/attendance/<int:session_id>")
+def attendance_result(session_id: int):
+    session = db.get_session(session_id)
+    if session is None:
+        flash("Attendance session not found.", "error")
+        return redirect(url_for("index"))
+
+    return render_template(
+        "attendance_result.html",
+        session=session,
+        records=db.list_attendance(session_id),
+    )
+
+
+def decode_image(image_bytes: bytes) -> np.ndarray:
+    data = np.frombuffer(image_bytes, dtype=np.uint8)
+    image = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("Could not read image.")
+    return image
+
+
+def datetime_now():
+    from datetime import datetime
+
+    return datetime.now()
+
+
+if __name__ == "__main__":
+    app.run(debug=True, use_reloader=False)

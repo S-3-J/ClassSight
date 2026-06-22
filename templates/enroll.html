@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h1>Enroll Student</h1>
+  <div class="grid">
+    <section class="panel">
+      <form method="post" enctype="multipart/form-data">
+        <label>
+          Student ID
+          <input name="student_id" required autocomplete="off">
+        </label>
+        <label>
+          Name
+          <input name="name" required autocomplete="off">
+        </label>
+        <label>
+          Face Images
+          <input type="file" name="images" accept="image/*" multiple required>
+        </label>
+        <button type="submit">Save Enrollment</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Enrolled Students</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Embeddings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in students %}
+            <tr>
+              <td>{{ student.student_id }}</td>
+              <td>{{ student.name }}</td>
+              <td>{{ student.embedding_count }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="3" class="muted">No students enrolled.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </div>
+{% endblock %}

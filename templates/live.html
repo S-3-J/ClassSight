@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h1>Live Recognition</h1>
+
+  <section class="panel">
+    <div class="controls">
+      <label>
+        Session Title
+        <input id="title" value="Live Class">
+      </label>
+      <label>
+        Class Duration Minutes
+        <input id="classDuration" type="number" min="1" step="1" value="40">
+      </label>
+      <label>
+        Required Minutes
+        <input id="requiredMinutes" type="number" min="1" step="1" value="30">
+      </label>
+      <label>
+        Recognition Similarity Threshold
+        <input id="threshold" type="number" min="0" max="1" step="0.01" value="0.55">
+      </label>
+      <label>
+        Detection Interval Seconds
+        <input id="interval" type="number" min="1" step="1" value="2">
+      </label>
+    </div>
+
+    <div class="actions">
+      <button id="openCamera" type="button">Open Camera</button>
+      <button id="startSession" type="button">Start Session</button>
+      <button id="finishSession" type="button">Finish Session</button>
+    </div>
+
+    <p id="status" class="muted">Camera closed.</p>
+
+    <div class="video-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+  </section>
+
+  <script>
+    const video = document.getElementById("video");
+    const overlay = document.getElementById("overlay");
+    const statusEl = document.getElementById("status");
+    const openCameraButton = document.getElementById("openCamera");
+    const startButton = document.getElementById("startSession");
+    const finishButton = document.getElementById("finishSession");
+    const titleInput = document.getElementById("title");
+    const classDurationInput = document.getElementById("classDuration");
+    const requiredMinutesInput = document.getElementById("requiredMinutes");
+    const thresholdInput = document.getElementById("threshold");
+    const intervalInput = document.getElementById("interval");
+
+    let stream = null;
+    let sessionId = null;
+    let timer = null;
+    let busy = false;
+
+    openCameraButton.addEventListener("click", async () => {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      resizeOverlay();
+      statusEl.textContent = "Camera open. Recognition preview is running.";
+      startPreviewLoop(false);
+    });
+
+    startButton.addEventListener("click", async () => {
+      const response = await fetch("/api/live/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settingsPayload())
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        statusEl.textContent = payload.error || "Could not start session.";
+        return;
+      }
+      sessionId = payload.session_id;
+      statusEl.textContent = `Live attendance session ${sessionId} started.`;
+      startPreviewLoop(true);
+    });
+
+    finishButton.addEventListener("click", async () => {
+      if (!sessionId) {
+        statusEl.textContent = "No active live session.";
+        return;
+      }
+      const response = await fetch("/api/live/finish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId })
+      });
+      const payload = await response.json();
+      if (response.ok && payload.result_url) {
+        window.location.href = payload.result_url;
+        return;
+      }
+      statusEl.textContent = payload.error || "Could not finish session.";
+    });
+
+    function settingsPayload() {
+      return {
+        title: titleInput.value,
+        class_duration_minutes: Number(classDurationInput.value),
+        required_minutes: Number(requiredMinutesInput.value),
+        similarity_threshold: Number(thresholdInput.value),
+        detection_interval_seconds: Number(intervalInput.value)
+      };
+    }
+
+    function startPreviewLoop(recordAttendance) {
+      if (timer) {
+        clearInterval(timer);
+      }
+      runRecognition(recordAttendance);
+      timer = setInterval(
+        () => runRecognition(recordAttendance),
+        Number(intervalInput.value) * 1000
+      );
+    }
+
+    async function runRecognition(recordAttendance) {
+      if (!stream || busy || video.videoWidth === 0) {
+        return;
+      }
+
+      busy = true;
+      try {
+        const frame = captureFrame();
+        const body = new FormData();
+        body.append("frame", frame, "frame.jpg");
+        body.append("similarity_threshold", thresholdInput.value);
+        body.append("record_attendance", recordAttendance ? "true" : "false");
+        if (sessionId) {
+          body.append("session_id", String(sessionId));
+        }
+
+        const response = await fetch("/api/live/recognize", {
+          method: "POST",
+          body
+        });
+        const payload = await response.json();
+        drawDetections(payload.detections || []);
+        statusEl.textContent = `${payload.detections?.length || 0} recognized face(s).`;
+      } finally {
+        busy = false;
+      }
+    }
+
+    function captureFrame() {
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return dataUrlToBlob(canvas.toDataURL("image/jpeg", 0.9));
+    }
+
+    function drawDetections(detections) {
+      resizeOverlay();
+      const ctx = overlay.getContext("2d");
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      ctx.lineWidth = 3;
+      ctx.font = "16px system-ui, sans-serif";
+
+      const scaleX = overlay.width / video.videoWidth;
+      const scaleY = overlay.height / video.videoHeight;
+
+      for (const detection of detections) {
+        const area = detection.facial_area;
+        if (!area) {
+          continue;
+        }
+        const x = area.x * scaleX;
+        const y = area.y * scaleY;
+        const w = area.w * scaleX;
+        const h = area.h * scaleY;
+        const label = detection.recognized
+          ? `${detection.name} ${(detection.similarity * 100).toFixed(1)}%`
+          : `Unknown ${(detection.similarity * 100).toFixed(1)}%`;
+
+        ctx.strokeStyle = detection.recognized ? "#12b76a" : "#f79009";
+        ctx.fillStyle = detection.recognized
+          ? "rgba(18, 183, 106, 0.9)"
+          : "rgba(247, 144, 9, 0.9)";
+        ctx.strokeRect(x, y, w, h);
+        const textWidth = ctx.measureText(label).width + 14;
+        ctx.fillRect(x, Math.max(0, y - 28), textWidth, 26);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(label, x + 7, Math.max(18, y - 9));
+      }
+    }
+
+    function resizeOverlay() {
+      overlay.width = video.videoWidth || overlay.clientWidth;
+      overlay.height = video.videoHeight || overlay.clientHeight;
+    }
+
+    function dataUrlToBlob(dataUrl) {
+      const parts = dataUrl.split(",");
+      const byteString = atob(parts[1]);
+      const mime = parts[0].match(/:(.*?);/)[1];
+      const data = new Uint8Array(byteString.length);
+      for (let i = 0; i < byteString.length; i += 1) {
+        data[i] = byteString.charCodeAt(i);
+      }
+      return new Blob([data], { type: mime });
+    }
+  </script>
+{% endblock %}

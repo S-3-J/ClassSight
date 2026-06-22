@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+.deepface/
+.cache/
+.DS_Store
+attendance.db
+uploads/

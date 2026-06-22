@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h1>Overview</h1>
+  <div class="grid">
+    <section>
+      <h2>Students</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Embeddings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in students %}
+            <tr>
+              <td>{{ student.student_id }}</td>
+              <td>{{ student.name }}</td>
+              <td>{{ student.embedding_count }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="3" class="muted">No students enrolled.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Sessions</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Started</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for session in sessions %}
+            <tr>
+              <td>{{ session.title }}</td>
+              <td>{{ session.started_at }}</td>
+              <td><a href="{{ url_for('attendance_result', session_id=session.id) }}">Open</a></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="3" class="muted">No attendance sessions yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </div>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h1>Process Attendance</h1>
+  <div class="grid">
+    <section class="panel">
+      <form method="post" enctype="multipart/form-data">
+        <label>
+          Session Title
+          <input name="title" value="Class">
+        </label>
+        <label>
+          Class Duration Minutes
+          <input type="number" min="1" step="1" name="class_duration_minutes" value="40" required>
+        </label>
+        <label>
+          Required Minutes
+          <input type="number" min="1" step="1" name="required_minutes" value="30" required>
+        </label>
+        <label>
+          Recognition Similarity Threshold
+          <input type="number" min="0" max="1" step="0.01" name="similarity_threshold" value="0.55" required>
+        </label>
+        <label>
+          Detection Interval Seconds
+          <input type="number" min="1" step="1" name="detection_interval_seconds" value="5" required>
+        </label>
+        <label>
+          Video
+          <input type="file" name="video" accept="video/*" required>
+        </label>
+        <button type="submit">Process Video</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Enrollment Readiness</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Student</th>
+            <th>Embeddings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in students %}
+            <tr>
+              <td>{{ student.name }}</td>
+              <td>{{ student.embedding_count }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="2" class="muted">Enroll students before processing attendance.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </div>
+{% endblock %}
