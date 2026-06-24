@@ -3,6 +3,7 @@
 A Python face-recognition attendance app built with Flask, DeepFace, TensorFlow,
 OpenCV, and SQLite.
 
+
 The app supports:
 
 - Student enrollment from one or more face images.
