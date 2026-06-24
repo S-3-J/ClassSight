@@ -10,6 +10,14 @@
         <input id="title" value="Live Class">
       </label>
       <label>
+        Class Size
+        <select id="detectionLevel">
+          <option value="low" selected>Low / Small Classroom</option>
+          <option value="medium">Medium / Regular Classroom</option>
+          <option value="high">High / Large Lecture Hall</option>
+        </select>
+      </label>
+      <label>
         Class Duration Minutes
         <input id="classDuration" type="number" min="1" step="1" value="40">
       </label>
@@ -24,6 +32,10 @@
       <label>
         Detection Interval Seconds
         <input id="interval" type="number" min="1" step="1" value="2">
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="enableCropping">
+        <span>Enable Multi-Region Cropping</span>
       </label>
     </div>
 
@@ -49,15 +61,25 @@
     const startButton = document.getElementById("startSession");
     const finishButton = document.getElementById("finishSession");
     const titleInput = document.getElementById("title");
+    const detectionLevelInput = document.getElementById("detectionLevel");
     const classDurationInput = document.getElementById("classDuration");
     const requiredMinutesInput = document.getElementById("requiredMinutes");
     const thresholdInput = document.getElementById("threshold");
     const intervalInput = document.getElementById("interval");
+    const enableCroppingInput = document.getElementById("enableCropping");
 
     let stream = null;
     let sessionId = null;
     let timer = null;
     let busy = false;
+    let currentDetectionLevel = "low";
+    let currentEnableCropping = false;
+
+    detectionLevelInput.addEventListener("change", () => {
+      if (detectionLevelInput.value !== "low" && !enableCroppingInput.checked) {
+        enableCroppingInput.checked = true;
+      }
+    });
 
     openCameraButton.addEventListener("click", async () => {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -106,8 +128,15 @@
     });
 
     function settingsPayload() {
+      const detectionLevel = detectionLevelInput.value;
+      let enableCropping = enableCroppingInput.checked;
+      if (!enableCropping && detectionLevel !== "low") {
+        enableCropping = true;
+      }
       return {
         title: titleInput.value,
+        detection_level: detectionLevel,
+        enable_cropping: enableCropping,
         class_duration_minutes: Number(classDurationInput.value),
         required_minutes: Number(requiredMinutesInput.value),
         similarity_threshold: Number(thresholdInput.value),
@@ -138,6 +167,8 @@
         body.append("frame", frame, "frame.jpg");
         body.append("similarity_threshold", thresholdInput.value);
         body.append("record_attendance", recordAttendance ? "true" : "false");
+        body.append("detection_level", detectionLevelInput.value);
+        body.append("enable_cropping", enableCroppingInput.checked ? "true" : "false");
         if (sessionId) {
           body.append("session_id", String(sessionId));
         }

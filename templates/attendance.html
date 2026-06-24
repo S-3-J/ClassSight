@@ -10,6 +10,14 @@
           <input name="title" value="Class">
         </label>
         <label>
+          Detection Level
+          <select name="detection_level">
+            <option value="low" selected>Low / Small Classroom</option>
+            <option value="medium">Medium / Regular Classroom</option>
+            <option value="high">High / Large Lecture Hall</option>
+          </select>
+        </label>
+        <label>
           Class Duration Minutes
           <input type="number" min="1" step="1" name="class_duration_minutes" value="40" required>
         </label>
@@ -24,6 +32,10 @@
         <label>
           Detection Interval Seconds
           <input type="number" min="1" step="1" name="detection_interval_seconds" value="5" required>
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="enable_cropping" checked>
+          <span>Enable Multi-Region Cropping</span>
         </label>
         <label>
           Video

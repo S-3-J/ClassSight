@@ -1,4 +1,4 @@
-# Face Attendance
+# ClassSight
 
 A Python face-recognition attendance app built with Flask, DeepFace, TensorFlow,
 OpenCV, and SQLite.

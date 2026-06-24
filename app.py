@@ -7,7 +7,7 @@ import numpy as np
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 from werkzeug.utils import secure_filename
 
-from attendance import AttendanceTracker, VideoAttendanceProcessor
+from attendance import DETECTION_LEVELS, AttendanceTracker, VideoAttendanceProcessor
 from database import AttendanceDB
 from embedder import FaceEmbedder
 
@@ -91,6 +91,8 @@ def attendance():
     required_minutes = float(request.form.get("required_minutes", 30))
     threshold = float(request.form.get("similarity_threshold", 0.55))
     interval = float(request.form.get("detection_interval_seconds", 5))
+    detection_level = request.form.get("detection_level", "low")
+    enable_cropping = request.form.get("enable_cropping") == "on"
     video = request.files.get("video")
 
     if video is None or not video.filename:
@@ -113,9 +115,12 @@ def attendance():
         detection_interval_seconds=interval,
     )
 
+    detector_backend = DETECTION_LEVELS.get(detection_level, "yolov8n")
     processor = VideoAttendanceProcessor(
         db=db,
-        embedder=FaceEmbedder(enforce_detection=False),
+        embedder=FaceEmbedder(enforce_detection=False, detector_backend=detector_backend),
+        detection_level=detection_level,
+        enable_cropping=enable_cropping,
     )
     stats = processor.process_video(
         video_path=video_path,
@@ -146,6 +151,8 @@ def api_live_start():
     required_minutes = float(payload.get("required_minutes") or 30)
     threshold = float(payload.get("similarity_threshold") or 0.55)
     interval = float(payload.get("detection_interval_seconds") or 2)
+    detection_level = str(payload.get("detection_level") or "low")
+    enable_cropping = bool(payload.get("enable_cropping", False))
 
     if required_minutes > class_duration:
         return jsonify({"error": "Required minutes cannot exceed class duration."}), 400
@@ -157,7 +164,11 @@ def api_live_start():
         similarity_threshold=threshold,
         detection_interval_seconds=interval,
     )
-    return jsonify({"session_id": session_id})
+    return jsonify({
+        "session_id": session_id,
+        "detection_level": detection_level,
+        "enable_cropping": enable_cropping,
+    })
 
 
 @app.post("/api/live/recognize")
@@ -169,48 +180,37 @@ def api_live_recognize():
     session_id = request.form.get("session_id", type=int)
     threshold = request.form.get("similarity_threshold", type=float) or 0.55
     record_attendance = request.form.get("record_attendance") == "true" and session_id
+    detection_level = request.form.get("detection_level", "low")
+    enable_cropping = request.form.get("enable_cropping") == "true"
+
+    detector_backend = DETECTION_LEVELS.get(detection_level, "yolov8n")
+    tracker = AttendanceTracker(
+        db=db,
+        embedder=FaceEmbedder(enforce_detection=True, detector_backend=detector_backend),
+        session_id=session_id or 0,
+        similarity_threshold=threshold,
+        detection_level=detection_level,
+        enable_cropping=enable_cropping,
+    )
 
     try:
         image = decode_image(image_file.read())
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    tracker = AttendanceTracker(
-        db=db,
-        embedder=FaceEmbedder(enforce_detection=True),
-        session_id=session_id or 0,
-        similarity_threshold=threshold,
-    )
-
-    try:
-        face_records = tracker.embedder.represent(image)
-    except Exception:
-        face_records = []
-
-    detections = []
     detected_at = datetime_now()
-    for face_record in face_records:
-        embedding = np.asarray(face_record["embedding"], dtype=np.float32)
-        best_match = tracker.best_match(embedding)
-        recognized = best_match is not None and best_match.similarity >= threshold
+    identifications = tracker.process_frame(image, detected_at, record_attendance)
 
-        if recognized and record_attendance:
-            db.record_detection(
-                session_id=session_id,
-                student_id=best_match.student_id,
-                detected_at=detected_at,
-                similarity=best_match.similarity,
-            )
-
-        detections.append(
-            {
-                "student_id": best_match.student_id if recognized else None,
-                "name": best_match.name if recognized else "Unknown",
-                "similarity": best_match.similarity if best_match else 0,
-                "recognized": recognized,
-                "facial_area": face_record.get("facial_area"),
-            }
-        )
+    detections = [
+        {
+            "student_id": ident.student_id,
+            "name": ident.name,
+            "similarity": ident.similarity,
+            "recognized": True,
+            "facial_area": ident.facial_area,
+        }
+        for ident in identifications
+    ]
 
     return jsonify(
         {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Face Attendance</title>
+    <title>ClassSight</title>
     <style>
       :root {
         color-scheme: light;
@@ -79,13 +79,40 @@
         font-weight: 650;
       }
 
-      input, button {
+      input, button, select {
         width: 100%;
         border-radius: 6px;
         font: inherit;
       }
 
+      input[type="checkbox"] {
+        width: auto;
+      }
+
       input {
+        border: 1px solid var(--border);
+        padding: 10px 12px;
+        background: #fff;
+        color: var(--text);
+      }
+
+      .checkbox-label {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 650;
+      }
+
+      .checkbox-label span {
+        font-weight: 650;
+        color: var(--text);
+      }
+
+      select {
         border: 1px solid var(--border);
         padding: 10px 12px;
         background: #fff;
@@ -188,7 +215,7 @@
   <body>
     <header>
       <nav>
-        <strong>Face Attendance</strong>
+        <strong>ClassSight</strong>
         <a href="{{ url_for('index') }}">Overview</a>
         <a href="{{ url_for('enroll') }}">Enroll</a>
         <a href="{{ url_for('attendance') }}">Attendance</a>
